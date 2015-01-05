@@ -9,6 +9,23 @@ class Client:
 
 	def connect(self):
 		self.clientSocket.connect((self.host, self.port))
+		while True:
+			request = raw_input("Say something")
+			self.clientSocket.send(request)
+			while True:
+				response = self.clientSocket.recv(1024)
+				if response:
+					self.clientParser(response)
+					break
+		# Quit
+		self.clientSocket.close()
+
+	def clientParser(self, response):
+		if response != None:
+			responseParsed = response.split("#")
+			if responseParsed:
+				print(responseParsed)
+
 
 client = Client()
 client.connect()
