@@ -26,6 +26,7 @@ class Client:
 			if responseParsed:
 				print(responseParsed)
 
+debug = True
 
 client = Client()
 client.connect()
