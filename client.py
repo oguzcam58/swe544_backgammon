@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import socket # Import socket module
 
+# ------------------------Client------------------------
 class Client:
 	def __init__(self):
 		self.clientSocket = socket.socket() # Create a socket object
@@ -15,18 +16,29 @@ class Client:
 			while True:
 				response = self.clientSocket.recv(1024)
 				if response:
-					self.clientParser(response)
-					break
+					isWait = self.clientParser(response)
+					if not isWait:
+						break
 		# Quit
 		self.clientSocket.close()
 
 	def clientParser(self, response):
+		isWait = False
 		if response != None:
 			responseParsed = response.split("#")
-			if responseParsed:
-				print(responseParsed)
+			if len(responseParsed) > 1:
+				if (responseParsed[0] == "NEGR" or responseParsed[0] == "WAGR"):
+					isWait = True
 
+			if responseParsed:
+				print(responseParsed[len(responseParsed) - 1])
+		return isWait
+
+
+# ------------------------Global Variables------------------------
 debug = True
 
+
+# ------------------------Main Program Functionality------------------------
 client = Client()
 client.connect()

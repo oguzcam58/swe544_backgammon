@@ -11,6 +11,9 @@ class Server:
 	
 
 	def start(self):
+		# Make using global variable possible
+		global threadCounter
+
 		self.serverSocket.bind((self.host, self.port)) # Bind to the port
 		self.serverSocket.listen(1000) # Now wait for client connection.
 		print('Server socket is created and it is the listening mode on ' + self.host + ":" + str(self.port))
@@ -24,6 +27,7 @@ class Server:
 			threadLock.release()
 			
 			cThread.start()
+
 
 # ------------------------ClientThread------------------------
 class clientThread(threading.Thread):
@@ -46,14 +50,22 @@ class clientThread(threading.Thread):
 		# Wait for client's requests, read and answer them
 		while True:
 			request = self.connection.recv(1024).strip()
-			response = self.parser(request)
+			response, exit = self.parser(request)
 			self.connection.send(response)
-		self.connection.close()
+			if exit:
+				break
+		if debug:
+			print("Exiting clientThread " + self.name) # Debug message
+			threading.Thread.exit()
 
 	def parser(self, request):
+		# Make using global variable possible
+		global threadCounter
+
 		if debug:
 			print("Incoming request : " + request) # Debug message
 		response = notValidRequest
+		exit = False
 		if request:
 			requestParsed = request.split("#")
 			
@@ -98,7 +110,8 @@ class clientThread(threading.Thread):
 						threadCounter += 1
 						game = gameThread(threadCounter, "Thread-" + str(threadCounter), self.registeredUsername, opponent)
 						game.start()
-						response = "NEGR#Success#Your opponent " + opponent + " is ready, press start to play"
+						response = "NEGR#Success#Your opponent " + opponent + " is ready, game is beginning"
+						exit = True
 					threadLock.release()
 				elif requestParsed[0] == "WATG":
 					threadLock.acquire()
@@ -109,9 +122,11 @@ class clientThread(threading.Thread):
 						game = activeGames[0]
 						game.addWatcher(self.registeredUsername)
 						response = "WAGR#Success# Stay tuned for seeing this great game"
+						exit = True
 					threadLock.release()
 
-		return response
+		return response, exit
+
 
 # ------------------------GameThread------------------------
 class gameThread(threading.Thread):
@@ -122,6 +137,9 @@ class gameThread(threading.Thread):
 		self.name = name
 		self.username1 = username1
 		self.username2 = username2
+		# Get connections for players
+		self.player1 = self.getConnFromUsername(username1)
+		self.player2 = self.getConnFromUsername(username2)
 		# Possible States
 		self.Playing = "Playing" # String Constant
 		self.PlayingInTurn = "PlayingInTurn" # String Constant
@@ -134,14 +152,43 @@ class gameThread(threading.Thread):
 		self.lastMove = ""
 	
 	def run(self):
-		print("GameThread is running for " + self.username1 + "-" + self.username2)
+		threadLock.acquire()
+		activeGames.append(self)
+		threadLock.release()
+		if debug:
+			print("GameThread is running for " + self.username1 + "-" + self.username2) # Debug message
 		# User 1 is informed that he is playing with user 2, inform user 2 here
+		response = "NEGR#Success#Your opponent " + self.username1 + " is ready, game is beginning"
+		self.player2.send(response)
+
+		self.getWatchersFromQueue()
+
+		# temporary
+		self.player1.close()
+		self.player2.close()
 	
 	def addWatcher(self, usernameOfWatcher):
-		print("AddWatcher function in gameThread is running")	
+		if debug:
+			print("AddWatcher function in gameThread is running") # Debug message
+		connection = self.getConnFromUsername(usernameOfWatcher)
+		if connection:
+			self.watchers.append(connection)
+			connection.send("WAGR#Success#Stay tuned for seeing this great game of players " + self.username1 + " and " + self.username2)
 
-# ------------------------Global------------------------
-# Queues
+	def getWatchersFromQueue(self):
+		threadLock.acquire()
+		self.addWatcher(readyToWatchQueue.get())
+		threadLock.release()
+
+	def getConnFromUsername(self, username):
+		connection = activeUsers.get(username, None)
+		if not connection and debug:
+			print(username + " has no connection") # Debug message
+		return connection
+
+
+# ------------------------Global Variables------------------------
+# Queues {username}
 readyToPlayQueue = Queue.Queue(10)
 readyToWatchQueue = Queue.Queue(1000)
 
@@ -157,5 +204,7 @@ threadLock = threading.Lock()
 
 debug = True # Can be manually changed
 
+
+# ------------------------Main Program Functionality------------------------
 server = Server()
 server.start()
