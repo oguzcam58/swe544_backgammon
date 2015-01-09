@@ -150,6 +150,22 @@ class gameThread(threading.Thread):
 		self.watchers = []
 		# Keep last move in mind for Wrong Play Alert
 		self.lastMove = ""
+
+		# GameState 0-23 for checkers on board, 24 for collection area and 25 for hit checkers
+		# In every row, first column is used for white checkers (O), second for black checkers (X)
+		self.gameState = [[0 for x in range(2)] for x in range(28)] # White, black
+
+		# White checkers default position
+		self.gameState[0][0] = 2
+		self.gameState[11][0] = 5
+		self.gameState[16][0] = 3
+		self.gameState[18][0] = 5
+
+		# Black checkers default position
+		self.gameState[23][1] = 2
+		self.gameState[12][1] = 5
+		self.gameState[7][1] = 3
+		self.gameState[5][1] = 5
 	
 	def run(self):
 		threadLock.acquire()
@@ -157,11 +173,16 @@ class gameThread(threading.Thread):
 		threadLock.release()
 		if debug:
 			print("GameThread is running for " + self.username1 + "-" + self.username2) # Debug message
+		
 		# User 1 is informed that he is playing with user 2, inform user 2 here
 		response = "NEGR#Success#Your opponent " + self.username1 + " is ready, game is beginning"
 		self.player2.send(response)
 
+		# Add waiting watchers to the game
 		self.getWatchersFromQueue()
+
+		# Send default state to all players and watchers
+
 
 		# temporary
 		self.player1.close()
