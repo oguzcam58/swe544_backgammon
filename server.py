@@ -2,6 +2,8 @@
 import Queue # Import queue module
 import socket # Import socket module
 import threading # Import threading module
+import copy # Import copy module
+import time # Import time module
 
 # ------------------------Server------------------------
 class Server:
@@ -16,25 +18,57 @@ class Server:
 		self.serverSocket.bind((self.host, self.port)) # Bind to the port
 		self.serverSocket.listen(1000) # Now wait for client connection.
 		print('Server socket is created and it is the listening mode on ' + self.host + ":" + str(self.port))
+
+		heartBeatThread = HeartBeatThread(threadCounter, "Thread-" + str(threadCounter))
+		heartBeatThread.start()
+
 		while True:
 			connection, address = self.serverSocket.accept() # Establish connection with client.
 			print('Got connection from ', address)
 
 			threadLock.acquire()
 			threadCounter += 1
-			cThread = clientThread(threadCounter, "Thread-" + str(threadCounter), connection, address)
+			cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), heartBeatThread, connection, address)
 			threadLock.release()
 
 			cThread.start()
 
+# ------------------------HeartBeatThread------------------------
+class HeartBeatThread(threading.Thread):
 
-# ------------------------ClientThread------------------------
-class clientThread(threading.Thread):
-
-	def __init__(self, threadID, name, connection, address):
+	def __init__(self, threadID, name):
 		threading.Thread.__init__(self)
 		self.threadID = threadID
 		self.name = name
+		self.pingSend = []
+
+	def run(self):
+		print("Starting thread " + str(self.threadID) + " " + self.name)
+		while True:
+			# Delete users info if no pong received in last 15 seconds
+			for username in self.pingSend:
+				threadLock.acquire()
+				if not activeUsers.get(username, None):
+					del activeUsers[username]
+				threadLock.release()
+
+			users = copy.copy(activeUsers) # Shallow copy
+			for username, connection in users.iteritems():
+				connection.send("PING")
+				self.pingSend.append(username)
+			time.sleep(15)
+
+	def pongReceived(self, username):
+		self.pingSend.remove(username)
+
+# ------------------------ClientThread------------------------
+class ClientThread(threading.Thread):
+
+	def __init__(self, threadID, name, heartBeatThread, connection, address):
+		threading.Thread.__init__(self)
+		self.threadID = threadID
+		self.name = name
+		self.heartBeatThread = heartBeatThread
 		self.connection = connection
 		self.address = address
 		self.registeredUsername = ""
@@ -50,12 +84,12 @@ class clientThread(threading.Thread):
 		while True:
 			request = self.connection.recv(1024).strip()
 			response, exit = self.parser(request)
-			self.connection.send(response)
+			if response:
+				self.connection.send(response)
 			if exit:
 				break
 		if debug:
 			print("Exiting clientThread " + self.name) # Debug message
-			Thread.exit()
 
 	def parser(self, request):
 		# Make using global variable possible
@@ -99,7 +133,14 @@ class clientThread(threading.Thread):
 				if debug:
 					print("Checking on Connected state") # Debug message
 
-				if requestParsed[0] == "NEWG":
+				if requestParsed[0] == "PONG":
+					if debug:
+						print("PONG request is taken") # Debug message
+					self.heartBeatThread.pongReceived(self.registeredUsername)
+					return None, False
+				elif requestParsed[0] == "NEWG":
+					if debug:
+						print("NEWG request is taken") # Debug message
 					threadLock.acquire()
 					if readyToPlayQueue.empty():
 						readyToPlayQueue.put(self.registeredUsername)
@@ -107,12 +148,14 @@ class clientThread(threading.Thread):
 					else:
 						opponent = readyToPlayQueue.get()
 						threadCounter += 1
-						game = gameThread(threadCounter, "Thread-" + str(threadCounter), self.registeredUsername, opponent)
+						game = GameThread(threadCounter, "Thread-" + str(threadCounter), self.heartBeatThread, self.registeredUsername, opponent)
 						game.start()
 						response = "NEGR#Success#Your opponent " + opponent + " is ready, game is beginning"
 						exit = True
 					threadLock.release()
 				elif requestParsed[0] == "WATG":
+					if debug:
+						print("WATG request is taken") # Debug message
 					threadLock.acquire()
 					if len(activeGames) == 0:
 						readyToWatchQueue.put(self.registeredUsername)
@@ -128,12 +171,13 @@ class clientThread(threading.Thread):
 
 
 # ------------------------GameThread------------------------
-class gameThread(threading.Thread):
+class GameThread(threading.Thread):
 
-	def __init__(self, threadID, name, username1, username2):
+	def __init__(self, threadID, name, heartBeatThread, username1, username2):
 		threading.Thread.__init__(self)
 		self.threadID = threadID
 		self.name = name
+		self.heartBeatThread = heartBeatThread
 		self.username1 = username1
 		self.username2 = username2
 		# Get connections for players
@@ -217,7 +261,7 @@ activeUsers = dict()
 # ActiveGames {objectItself}
 activeGames = []
 
-threadCounter = 0
+threadCounter = 1
 
 notValidRequest = "WRRE#Fail#Your request is not valid"
 threadLock = threading.Lock()

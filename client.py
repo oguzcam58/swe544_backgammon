@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import socket # Import socket module
+import threading # Import threading module
 
 # ------------------------Client------------------------
 class Client:
@@ -24,19 +25,29 @@ class Client:
 		self.gameState[7][1] = 3
 		self.gameState[5][1] = 5
 
+		self.response = None
+
 	def connect(self):
 		self.clientSocket.connect((self.host, self.port))
+		readerThread = ReaderThread(1, "Thread-1", self.clientSocket, self)
+		readerThread.start()
+
 		while True:
 			request = raw_input("Say something")
 			self.clientSocket.send(request)
 			while True:
-				response = self.clientSocket.recv(1024)
+				response = self.response
+
 				if response:
 					isWait = self.clientParser(response)
+					self.setResponse(None)
 					if not isWait:
 						break
 		# Quit
 		self.clientSocket.close()
+
+	def setResponse(self, response):
+		self.response = response
 
 	def clientParser(self, response):
 		Success = "Success" # String Constant
@@ -95,7 +106,7 @@ class Client:
 
 	def drawSecondPart(self, gameState):
 		maxChecker = self.maxCheckerInACol(gameState, 11, -1)
-		for counter in range(maxChecker+1, 0, -1):
+		for counter in range(maxChecker, 0, -1):
 			line = "|"
 			for i in range(11, -1, -1):
 				if i == 5:
@@ -157,6 +168,20 @@ class Client:
 				if counter == 6:
 					line += '------'
 			print line
+
+class ReaderThread(threading.Thread):
+	def __init__(self, threadId, name, connection, clientThread):
+		threading.Thread.__init__(self)
+		self.connection = connection
+		self.clientThread = clientThread
+
+	def run(self):
+		while True:
+			response = self.connection.recv(1024)
+			if response == "PING":
+				self.connection.send("PONG")
+			else:
+				self.clientThread.setResponse(response)
 
 # ------------------------Global Variables------------------------
 debug = True
