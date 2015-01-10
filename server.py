@@ -8,7 +8,6 @@ class Server:
 	serverSocket = socket.socket() # Create a socket object
 	host = socket.gethostname() # Get local machine name
 	port = 12345 # Reserve a port for your service.
-	
 
 	def start(self):
 		# Make using global variable possible
@@ -20,18 +19,18 @@ class Server:
 		while True:
 			connection, address = self.serverSocket.accept() # Establish connection with client.
 			print('Got connection from ', address)
-			
+
 			threadLock.acquire()
 			threadCounter += 1
 			cThread = clientThread(threadCounter, "Thread-" + str(threadCounter), connection, address)
 			threadLock.release()
-			
+
 			cThread.start()
 
 
 # ------------------------ClientThread------------------------
 class clientThread(threading.Thread):
-	
+
 	def __init__(self, threadID, name, connection, address):
 		threading.Thread.__init__(self)
 		self.threadID = threadID
@@ -39,12 +38,12 @@ class clientThread(threading.Thread):
 		self.connection = connection
 		self.address = address
 		self.registeredUsername = ""
-		# Possible States	
+		# Possible States
 		self.Connectionless = "Connectionless" # String Constant
 		self.Connected = "Connected" # String Constant
 		# Initial State
 		self.state = self.Connectionless
-	
+
 	def run(self):
 		print("Starting thread " + str(self.threadID) + " " + self.name + " " + str(self.address))
 		# Wait for client's requests, read and answer them
@@ -56,7 +55,7 @@ class clientThread(threading.Thread):
 				break
 		if debug:
 			print("Exiting clientThread " + self.name) # Debug message
-			threading.Thread.exit()
+			Thread.exit()
 
 	def parser(self, request):
 		# Make using global variable possible
@@ -68,12 +67,12 @@ class clientThread(threading.Thread):
 		exit = False
 		if request:
 			requestParsed = request.split("#")
-			
+
 			# Connectionless state, no record on active users
 			if self.state == self.Connectionless:
 				if debug:
 					print("Checking on Connectionless state") # Debug message
-				
+
 				if requestParsed[0] == "CONN":
 					response = "CONR"
 					username = requestParsed[1] if len(requestParsed) > 1 else None
@@ -90,9 +89,9 @@ class clientThread(threading.Thread):
 							else:
 								response += "#Busy#There is an active user with " + username + " username, please choose another username"
 							threadLock.release()
-					else: 
+					else:
 						response = notValidRequest
-				else: 
+				else:
 					response = notValidRequest
 
 			# Connected state
@@ -130,7 +129,7 @@ class clientThread(threading.Thread):
 
 # ------------------------GameThread------------------------
 class gameThread(threading.Thread):
-	
+
 	def __init__(self, threadID, name, username1, username2):
 		threading.Thread.__init__(self)
 		self.threadID = threadID
@@ -151,9 +150,9 @@ class gameThread(threading.Thread):
 		# Keep last move in mind for Wrong Play Alert
 		self.lastMove = ""
 
-		# GameState 0-23 for checkers on board, 24 for collection area and 25 for hit checkers
+		# GameState 0-23 for checkers on board, 24 for collection area and 25 for hit checkers
 		# In every row, first column is used for white checkers (O), second for black checkers (X)
-		self.gameState = [[0 for x in range(2)] for x in range(28)] # White, black
+		self.gameState = [[0 for x in range(2)] for x in range(26)] # White, black
 
 		# White checkers default position
 		self.gameState[0][0] = 2
@@ -166,14 +165,14 @@ class gameThread(threading.Thread):
 		self.gameState[12][1] = 5
 		self.gameState[7][1] = 3
 		self.gameState[5][1] = 5
-	
+
 	def run(self):
 		threadLock.acquire()
 		activeGames.append(self)
 		threadLock.release()
 		if debug:
 			print("GameThread is running for " + self.username1 + "-" + self.username2) # Debug message
-		
+
 		# User 1 is informed that he is playing with user 2, inform user 2 here
 		response = "NEGR#Success#Your opponent " + self.username1 + " is ready, game is beginning"
 		self.player2.send(response)
@@ -187,7 +186,7 @@ class gameThread(threading.Thread):
 		# temporary
 		self.player1.close()
 		self.player2.close()
-	
+
 	def addWatcher(self, usernameOfWatcher):
 		if debug:
 			print("AddWatcher function in gameThread is running") # Debug message
