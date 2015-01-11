@@ -86,6 +86,10 @@ class Client:
 					self.state = self.Connected
 				elif (responseParsed[0] == "NEGR" or responseParsed[0] == "WAGR"):
 					if responseParsed[1] == Success:
+						if responseParsed[0] == "NEGR":
+							self.state = self.Playing
+						else:
+							self.state = self.Watching
 						printMessage = False
 						print ""
 						print(responseParsed[len(responseParsed) - 1])
@@ -129,6 +133,7 @@ class Client:
 					if debug:
 						print response # Debug message
 					if responseParsed[1] != None and responseParsed[1] != "":
+						self.state = self.Watching
 						checkers = responseParsed[1].split(",")
 						for checker in checkers:
 							if checker == None or checker == "":
@@ -137,7 +142,12 @@ class Client:
 							if places == None or places == "" or len(places) < 3:
 								continue
 							self.gameBoard[places[0]][places[1]] = places[2]
-
+				elif responseParsed[0] == "LEWR":
+					self.state = self.Connected
+				elif responseParsed[0] == "OVER":
+					self.state = self.Connected
+				elif responseParsed[0] == "QUIR":
+					self.state = self.Connectionless
 
 			if printMessage:
 				print(responseParsed[len(responseParsed) - 1])

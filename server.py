@@ -29,7 +29,7 @@ class Server:
 
 			threadLock.acquire()
 			threadCounter += 1
-			cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), heartBeatThread, connection, address)
+			cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), heartBeatThread, connection, None)
 			threadLock.release()
 
 			cThread.start()
@@ -119,23 +119,22 @@ class HeartBeatThread(threading.Thread):
 # ------------------------ClientThread------------------------
 class ClientThread(threading.Thread):
 
-	def __init__(self, threadID, name, heartBeatThread, connection, address):
+	def __init__(self, threadID, name, heartBeatThread, connection, username):
 		threading.Thread.__init__(self)
 		self.threadID = threadID
 		self.name = name
 		self.heartBeatThread = heartBeatThread
 		self.connection = connection
-		self.address = address
-		self.registeredUsername = ""
+		self.registeredUsername = username if username else ""
 		# Possible States
 		self.Connectionless = "Connectionless" # String Constant
 		self.Connected = "Connected" # String Constant
 		# Initial State
-		self.state = self.Connectionless
+		self.state = self.Connected if username else self.Connectionless
 
 	def run(self):
 
-		print("Starting ClientThread " + str(self.threadID) + " " + self.name + " " + str(self.address))
+		print("Starting ClientThread " + str(self.threadID) + " " + self.name)
 		# Wait for client's requests, read and answer them
 		while True:
 			try:
@@ -230,6 +229,9 @@ class ClientThread(threading.Thread):
 						response = "WAGR#Success# Stay tuned for seeing this great game"
 						exit = True
 					threadLock.release()
+				elif requestParsed[0] == "QUIT":
+					response = "QUIR#Success#Goodbye"
+					self.heartBeatThread.deleteFromActiveUsers(self.registeredUsername)
 
 		return response, exit
 
@@ -330,7 +332,15 @@ class GameThread(threading.Thread):
 			player1.send(finishMessage)
 		if activeUsers.get(self.username2, None):
 			player2.send(finishMessage)
-		# notifyWatchers
+
+		threadLock.acquire()
+		threadCounter += 1
+		cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), self.heartBeatThread, self.player1, self.username1)
+		cThread.start()
+		cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), self.heartBeatThread, self.player2, self.username2)
+		cThread.start()
+		threadLock.release()
+
 		activeGames.remove(self)
 
 		if debug:
@@ -523,6 +533,7 @@ class WatcherThread(threading.Thread):
 		self.gameThread = gameThread
 		self.watchers = gameThread.watchers
 	def run(self):
+		global threadCounter
 		while self.gameThread.gameState != self.gameThread.Over:
 			for watcher in self.watchers:
 				if not activeUsers.get(watcher, None):
@@ -533,6 +544,11 @@ class WatcherThread(threading.Thread):
 					self.gameThread.pongReceived(watcherConn)
 				if "LEAW" in request:
 					self.gameThread.deleteWatcher(watcher)
+					self.watcherConn.send("LEWR#Success#You left watching the game, you may continue with others")
+					threadLock.acquire()
+					threadCounter += 1
+					cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), self.gameThread.heartBeatThread, watcherConn, watcher)
+					threadLock.release()
 
 # ------------------------NotifyWatcherThread------------------------
 class NotifyWatchersThread(threading.Thread):
@@ -552,6 +568,16 @@ class NotifyWatchersThread(threading.Thread):
 						self.gameThread.deleteWatcher(watcher)
 					watcherConn = getConnFromUsername(watcher)
 					watcherConn.send(self.queue.get())
+
+		for watcher in self.watchers:
+			if not activeUsers.get(watcher, None):
+				self.gameThread.deleteWatcher(watcher)
+			watcherConn = getConnFromUsername(watcher)
+			watcherConn.send("OVER#" + self.gameThread.winner + " wins the game")
+			threadLock.acquire()
+			threadCounter += 1
+			cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), self.gameThread.heartBeatThread, watcherConn, watcher)
+			threadLock.release()
 
 # ------------------------Global Variables------------------------
 # Queues {username}
