@@ -1,53 +1,67 @@
 #!/usr/bin/env python
 import socket # Import socket module
 import threading # Import threading module
+import Queue # Import Queue Module
 
 # ------------------------Client------------------------
 class Client:
+
 	def __init__(self):
 		self.clientSocket = socket.socket() # Create a socket object
 		self.host = socket.gethostname() # Get local machine name
 		self.port = 12345 # Reserve a port for your service.
-
+		# Possible States
+		self.Connectionless = "Connectionless"
+		self.Connected = "Connected"
+		self.Playing = "Playing"
+		self.PlayingInTurn = "PlayingInTurn"
+		self.Watching = "Watching"
+		# Default State
+		self.state = self.Connectionless
 		# GameState 0-23 for checkers on board, 24 for collection area and 25 for hit checkers.
 		# In every row, first column is used for White checkers (O), Second for black checkers (X)
 		self.gameState = [[0 for x in range(2)] for x in range(26)] # White, black
-
 		# White checkers default position
 		self.gameState[0][0] = 2
 		self.gameState[11][0] = 5
 		self.gameState[16][0] = 3
 		self.gameState[18][0] = 5
-
 		# Black checkers default position
 		self.gameState[23][1] = 2
 		self.gameState[12][1] = 5
 		self.gameState[7][1] = 3
 		self.gameState[5][1] = 5
-
 		self.response = None
-
+		self.readerQueue = Queue.Queue()
 	def connect(self):
 		self.clientSocket.connect((self.host, self.port))
 		readerThread = ReaderThread(1, "Thread-1", self.clientSocket, self)
 		readerThread.start()
 
 		while True:
-			request = raw_input("Say something")
+			protocol = ""
+			if self.state == self.Connectionless:
+				print "Please choose a username: "
+				protocol = "CONN#"
+			elif self.state == self.Connected:
+				print "To play game, please write NEWG. To watch a game, please write WATG"
+			elif self.state == self.PlayingInTurn:
+				print "Make your move by entering current state of the checker and last state of the checker, separate your moves by comma for example if you throw 6-2: 3 5, 10 16"
+			request = protocol + raw_input("")
 			self.clientSocket.send(request)
 			while True:
-				response = self.response
-
+				response = self.readerQueue.get()
 				if response:
 					isWait = self.clientParser(response)
-					self.setResponse(None)
-					if not isWait:
+					if not isWait and self.readerQueue.empty():
 						break
+
+		print "Exiting Client"
 		# Quit
 		self.clientSocket.close()
 
 	def setResponse(self, response):
-		self.response = response
+		self.readerQueue.put(response)
 
 	def clientParser(self, response):
 		Success = "Success" # String Constant
@@ -56,15 +70,37 @@ class Client:
 		Wait = "Wait" # String Constant
 
 		isWait = False
-		if response != None:
+		if response:
+			printMessage = True
 			responseParsed = response.split("#")
 			if len(responseParsed) > 1:
-				if (responseParsed[0] == "NEGR" or responseParsed[0] == "WAGR"):
+				if responseParsed[0] == "CONR" and responseParsed[1] == Success:
+					self.state = self.Connected
+				elif (responseParsed[0] == "NEGR" or responseParsed[0] == "WAGR"):
 					if responseParsed[1] == Success:
+						printMessage = False
+						print ""
+						print(responseParsed[len(responseParsed) - 1])
+						print ""
 						self.drawGameBoard(self.gameState)
 					isWait = True
-
-			if responseParsed:
+				elif responseParsed[0] == "INFO":
+					if responseParsed[1] == Wait:
+						isWait = True
+				elif responseParsed[0] == "THRD":
+					self.state = self.Playing
+					if responseParsed[1] == Success:
+						self.state = self.PlayingInTurn
+						print "Dice: " + responseParsed[2]
+						print "It is your turn to play"
+						printMessage = False
+						isWait = False
+					else:
+						print "Dice: " + responseParsed[2]
+						printMessage = False
+						isWait = True
+						print ""
+			if printMessage:
 				print(responseParsed[len(responseParsed) - 1])
 		return isWait
 
@@ -169,6 +205,7 @@ class Client:
 					line += '------'
 			print line
 
+# ------------------------ReaderThread------------------------
 class ReaderThread(threading.Thread):
 	def __init__(self, threadId, name, connection, clientThread):
 		threading.Thread.__init__(self)
@@ -177,11 +214,12 @@ class ReaderThread(threading.Thread):
 
 	def run(self):
 		while True:
-			response = self.connection.recv(1024)
-			if response == "PING":
-				self.connection.send("PONG")
-			else:
-				self.clientThread.setResponse(response)
+			response = self.connection.recv(1024).strip()
+			if response:
+				if response == "PING":
+					self.connection.send("PONG")
+				else:
+					self.clientThread.setResponse(response)
 
 # ------------------------Global Variables------------------------
 debug = True

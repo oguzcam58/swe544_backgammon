@@ -4,6 +4,7 @@ import socket # Import socket module
 import threading # Import threading module
 import copy # Import copy module
 import time # Import time module
+from random import randint # Import randint method
 
 # ------------------------Server------------------------
 class Server:
@@ -45,21 +46,68 @@ class HeartBeatThread(threading.Thread):
 	def run(self):
 		print("Starting thread " + str(self.threadID) + " " + self.name)
 		while True:
+			if debug:
+					print "PING-PONG is starting" # Debug message
 			# Delete users info if no pong received in last 15 seconds
 			for username in self.pingSend:
-				threadLock.acquire()
-				if not activeUsers.get(username, None):
-					del activeUsers[username]
-				threadLock.release()
+				self.deleteFromActiveUsers(username)
+				self.pingSend.remove(username)
 
 			users = copy.copy(activeUsers) # Shallow copy
 			for username, connection in users.iteritems():
-				connection.send("PING")
-				self.pingSend.append(username)
+				try:
+					connection.send("PING")
+					self.pingSend.append(username)
+				except:
+					if debug:
+						print("An exception occurred") # Debug message
+						raise
+					self.deleteFromActiveUsers(username)
+			self.checkWaitingClients()
 			time.sleep(15)
+
+	def deleteFromActiveUsers(self, username):
+		if debug:
+			print username + " is being deleted from active users list because of no response to heartbeat messages" # Debug message
+
+		threadLock.acquire()
+		if activeUsers.get(username, None):
+			del activeUsers[username]
+		try:
+			if readyToPlayQueue.index(username) > -1:
+				readyToPlayQueue.remove(username)
+		except ValueError:
+			pass
+		try:
+			if readyToWatchQueue.index(username) > -1:
+				readyToWatchQueue.remove(username)
+		except ValueError:
+			pass
+		threadLock.release()
 
 	def pongReceived(self, username):
 		self.pingSend.remove(username)
+
+	def checkWaitingClients(self):
+		threadLock.acquire()
+		playQueue = copy.copy(readyToPlayQueue)
+		while len(playQueue) > 0:
+			user = getConnFromUsername(playQueue[0])
+			request = user.recv(1024).strip()
+			if request == "PONG":
+				self.pongReceived(playQueue[0])
+				if debug:
+					print("PONG request is taken") # Debug message
+			del playQueue[0]
+
+		waitQueue = copy.copy(readyToWatchQueue)
+		while len(waitQueue) > 0:
+			user = getConnFromUsername(waitQueue[0])
+			request = user.recv(1024).strip()
+			if request == "PONG":
+				self.pongReceived(waitQueue[0])
+			del waitQueue[0]
+		threadLock.release()
 
 # ------------------------ClientThread------------------------
 class ClientThread(threading.Thread):
@@ -79,17 +127,25 @@ class ClientThread(threading.Thread):
 		self.state = self.Connectionless
 
 	def run(self):
-		print("Starting thread " + str(self.threadID) + " " + self.name + " " + str(self.address))
+
+		print("Starting ClientThread " + str(self.threadID) + " " + self.name + " " + str(self.address))
 		# Wait for client's requests, read and answer them
 		while True:
-			request = self.connection.recv(1024).strip()
-			response, exit = self.parser(request)
-			if response:
-				self.connection.send(response)
+			try:
+				request = self.connection.recv(1024).strip()
+				response, exit = self.parser(request)
+				if response:
+					self.connection.send(response)
+			except:
+				if debug:
+					print("An exception occurred") # Debug message
+					raise
+				break
 			if exit:
 				break
+
 		if debug:
-			print("Exiting clientThread " + self.name) # Debug message
+			print("Exiting ClientThread " + self.name) # Debug message
 
 	def parser(self, request):
 		# Make using global variable possible
@@ -142,23 +198,24 @@ class ClientThread(threading.Thread):
 					if debug:
 						print("NEWG request is taken") # Debug message
 					threadLock.acquire()
-					if readyToPlayQueue.empty():
-						readyToPlayQueue.put(self.registeredUsername)
+					if len(readyToPlayQueue) == 0:
+						readyToPlayQueue.append(self.registeredUsername)
 						response = "NEGR#Wait#There is no one wants to play at the moment; you are added to waiting list"
 					else:
-						opponent = readyToPlayQueue.get()
+						opponent = readyToPlayQueue[0]
+						del readyToPlayQueue[0]
 						threadCounter += 1
 						game = GameThread(threadCounter, "Thread-" + str(threadCounter), self.heartBeatThread, self.registeredUsername, opponent)
 						game.start()
 						response = "NEGR#Success#Your opponent " + opponent + " is ready, game is beginning"
-						exit = True
 					threadLock.release()
+					exit = True
 				elif requestParsed[0] == "WATG":
 					if debug:
 						print("WATG request is taken") # Debug message
 					threadLock.acquire()
 					if len(activeGames) == 0:
-						readyToWatchQueue.put(self.registeredUsername)
+						readyToWatchQueue.append(self.registeredUsername)
 						response = "WAGR#Wait#There is no active game at the moment; you are added to waiting list"
 					else:
 						game = activeGames[0]
@@ -181,8 +238,8 @@ class GameThread(threading.Thread):
 		self.username1 = username1
 		self.username2 = username2
 		# Get connections for players
-		self.player1 = self.getConnFromUsername(username1)
-		self.player2 = self.getConnFromUsername(username2)
+		self.player1 = getConnFromUsername(username1)
+		self.player2 = getConnFromUsername(username2)
 		# Possible States
 		self.Playing = "Playing" # String Constant
 		self.PlayingInTurn = "PlayingInTurn" # String Constant
@@ -215,46 +272,102 @@ class GameThread(threading.Thread):
 		activeGames.append(self)
 		threadLock.release()
 		if debug:
-			print("GameThread is running for " + self.username1 + "-" + self.username2) # Debug message
+			print("Starting GameThread for " + self.username1 + "-" + self.username2) # Debug message
 
 		# User 1 is informed that he is playing with user 2, inform user 2 here
-		response = "NEGR#Success#Your opponent " + self.username1 + " is ready, game is beginning"
-		self.player2.send(response)
+		self.player2.send("NEGR#Success#Your opponent " + self.username1 + " is ready, game is beginning")
 
 		# Add waiting watchers to the game
 		self.getWatchersFromQueue()
 
-		# Send default state to all players and watchers
+		whoWillStart = randint(0,1)
+		self.player1.send("INFO#Wait#Your checkers are signed with O")
+		self.player2.send("INFO#Wait#Your checkers are signed with X")
+		time.sleep(1)
 
+		if whoWillStart == 0:
+			self.throwDice(self.player1, self.player2)
+		else:
+			self.throwDice(self.player2, self.player1)
 
-		# temporary
-		self.player1.close()
-		self.player2.close()
+		if debug:
+			print("Exiting GameThread " + self.name) # Debug message
+
+	def parser(self, request):
+		if debug:
+			print("Incoming request : " + request) # Debug message
+		response = notValidRequest
+		exit = False
+		if request:
+			requestParsed = request.split("#")
+			if debug:
+				print("Checking on PlayingInTurn state") # Debug message
+			if requestParsed[0] == "SNDM":
+				if debug:
+					print("SNDM request is taken") # Debug message
+		return response, exit
+
+	def throwDice(self, playerInTurn, playerOther):
+		dice1 = str(randint(1,6))
+		dice2 = str(randint(1,6))
+
+		playerInTurn.send( "THRD#Success#" + dice1 + "-" + dice2 )
+		playerOther.send( "THRD#Wait#" + dice1 + "-" + dice2 )
+		#notifyWatchersDice(username1, dice1, dice2)
+
+		# Wait for client's requests, read and answer them
+		while True:
+			exit = False
+			try:
+				request = playerInTurn.recv(1024).strip()
+				requestOther = playerOther.recv(1024).strip()
+
+				if requestOther: # It just can send PONG messages
+					if requestOther == "PONG":
+						self.pongReceived(playerOther)
+
+				if request:
+					if request == "PONG":
+						self.pongReceived(playerInTurn)
+					else:
+						response, exit = self.parser(request)
+						if response:
+							playerInTurn.send(response)
+							playerOther.send(response)
+			except:
+				if debug:
+					print("An exception occurred") # Debug message
+					raise
+				break
+			if exit:
+				break
+
+	def pongReceived(self, player):
+		if player == self.player1:
+			self.heartBeatThread.pongReceived(self.username1)
+		if player == self.player2:
+			self.heartBeatThread.pongReceived(self.username2)
 
 	def addWatcher(self, usernameOfWatcher):
 		if debug:
 			print("AddWatcher function in gameThread is running") # Debug message
-		connection = self.getConnFromUsername(usernameOfWatcher)
+		connection = getConnFromUsername(usernameOfWatcher)
 		if connection:
 			self.watchers.append(connection)
 			connection.send("WAGR#Success#Stay tuned for seeing this great game of players " + self.username1 + " and " + self.username2)
 
 	def getWatchersFromQueue(self):
 		threadLock.acquire()
-		self.addWatcher(readyToWatchQueue.get())
+		while len(readyToWatchQueue) > 0:
+			self.addWatcher(readyToWatchQueue[0])
+			del readyToWatchQueue[0]
 		threadLock.release()
-
-	def getConnFromUsername(self, username):
-		connection = activeUsers.get(username, None)
-		if not connection and debug:
-			print(username + " has no connection") # Debug message
-		return connection
 
 
 # ------------------------Global Variables------------------------
 # Queues {username}
-readyToPlayQueue = Queue.Queue(10)
-readyToWatchQueue = Queue.Queue(1000)
+readyToPlayQueue = []
+readyToWatchQueue = []
 
 # ActiveUsers {username, connection}
 activeUsers = dict()
@@ -266,8 +379,14 @@ threadCounter = 1
 notValidRequest = "WRRE#Fail#Your request is not valid"
 threadLock = threading.Lock()
 
-debug = True # Can be manually changed
+debug = False # Can be manually changed
 
+# ------------------------Global Methods------------------------
+def getConnFromUsername(username):
+	connection = activeUsers.get(username, None)
+	if not connection and debug:
+		print(username + " has no connection") # Debug message
+	return connection
 
 # ------------------------Main Program Functionality------------------------
 server = Server()
