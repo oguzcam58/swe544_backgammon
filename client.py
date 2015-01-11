@@ -20,17 +20,17 @@ class Client:
 		self.state = self.Connectionless
 		# GameState 0-23 for checkers on board, 24 for collection area and 25 for hit checkers.
 		# In every row, first column is used for White checkers (O), Second for black checkers (X)
-		self.gameState = [[0 for x in range(2)] for x in range(26)] # White, black
+		self.gameBoard = [[0 for x in range(2)] for x in range(26)] # White, black
 		# White checkers default position
-		self.gameState[0][0] = 2
-		self.gameState[11][0] = 5
-		self.gameState[16][0] = 3
-		self.gameState[18][0] = 5
+		self.gameBoard[0][0] = 2
+		self.gameBoard[11][0] = 5
+		self.gameBoard[16][0] = 3
+		self.gameBoard[18][0] = 5
 		# Black checkers default position
-		self.gameState[23][1] = 2
-		self.gameState[12][1] = 5
-		self.gameState[7][1] = 3
-		self.gameState[5][1] = 5
+		self.gameBoard[23][1] = 2
+		self.gameBoard[12][1] = 5
+		self.gameBoard[7][1] = 3
+		self.gameBoard[5][1] = 5
 		self.response = None
 		self.readerQueue = Queue.Queue()
 	def connect(self):
@@ -46,8 +46,16 @@ class Client:
 			elif self.state == self.Connected:
 				print "To play game, please write NEWG. To watch a game, please write WATG"
 			elif self.state == self.PlayingInTurn:
-				print "Make your move by entering current state of the checker and last state of the checker, separate your moves by comma for example if you throw 6-2: 3 5, 10 16"
-			request = protocol + raw_input("")
+				print "Make your move by entering current place of the checker and last place of the checker after a dash, separate your moves by comma for example if you throw 6-2: 3-5, 10-16 "
+				print "To collect checkers use place 25 "
+				print "To play hit checkers use place 26 "
+				protocol = "SNDM#"
+
+			inputByUser = raw_input("")
+			if inputByUser == "WRNG":
+				protocol = ""
+
+			request = protocol + inputByUser
 			self.clientSocket.send(request)
 			while True:
 				response = self.readerQueue.get()
@@ -82,7 +90,7 @@ class Client:
 						print ""
 						print(responseParsed[len(responseParsed) - 1])
 						print ""
-						self.drawGameBoard(self.gameState)
+						self.drawGameBoard(self.gameBoard)
 					isWait = True
 				elif responseParsed[0] == "INFO":
 					if responseParsed[1] == Wait:
@@ -100,18 +108,49 @@ class Client:
 						printMessage = False
 						isWait = True
 						print ""
+				elif responseParsed[0] == "SNMR":
+					if debug:
+						print response # Debug message
+					moves = responseParsed[2].split(",")
+					for move in moves:
+						if move == None or move == '':
+							continue
+						move.strip()
+						places = move.split("-")
+						if places == None or places == '':
+							continue
+						checkerOldPlace = int(places[0].strip()) - 1
+						checkerNewPlace = int(places[1].strip()) - 1
+						self.gameBoard[checkerOldPlace][int(responseParsed[1])] -= 1
+						self.gameBoard[checkerNewPlace][int(responseParsed[1])] += 1
+						self.drawGameBoard(self.gameBoard)
+						print ""
+				elif responseParsed[0] == "GMBR":
+					if debug:
+						print response # Debug message
+					if responseParsed[1] != None and responseParsed[1] != "":
+						checkers = responseParsed[1].split(",")
+						for checker in checkers:
+							if checker == None or checker == "":
+								continue
+							places = checker.split("-")
+							if places == None or places == "" or len(places) < 3:
+								continue
+							self.gameBoard[places[0]][places[1]] = places[2]
+
+
 			if printMessage:
 				print(responseParsed[len(responseParsed) - 1])
 		return isWait
 
-	def drawGameBoard(self, gameState):
+	def drawGameBoard(self, gameBoard):
 		self.drawTitle(13, 25)
-		self.drawFirstPart(gameState)
+		self.drawFirstPart(gameBoard)
 		self.drawEmptyLine(17)
-		self.drawSecondPart(gameState)
+		self.drawSecondPart(gameBoard)
 		self.drawTitle(12, 0)
 
-	def drawFirstPart(self, gameState):
+	def drawFirstPart(self, gameBoard):
 		counter = 0
 		isCheckerAvailable = True
 		while isCheckerAvailable:
@@ -122,10 +161,10 @@ class Client:
 				if i == 18:
 					line += '|' + str.ljust(' ', 5) + '|'
 
-				if gameState[i][0] >= counter:
+				if gameBoard[i][0] >= counter:
 					line += " O"
 					checkerCount += 1
-				elif gameState[i][1] >= counter:
+				elif gameBoard[i][1] >= counter:
 					line += " X"
 					checkerCount += 1
 				else:
@@ -140,17 +179,17 @@ class Client:
 			if counter >= 5 and checkerCount == 0:
 				isCheckerAvailable = False
 
-	def drawSecondPart(self, gameState):
-		maxChecker = self.maxCheckerInACol(gameState, 11, -1)
+	def drawSecondPart(self, gameBoard):
+		maxChecker = self.maxCheckerInACol(gameBoard, 11, -1)
 		for counter in range(maxChecker, 0, -1):
 			line = "|"
 			for i in range(11, -1, -1):
 				if i == 5:
 					line += '|' + str.ljust(' ', 5) + '|'
 
-				if gameState[i][0] >= counter:
+				if gameBoard[i][0] >= counter:
 					line += " O"
-				elif gameState[i][1] >= counter:
+				elif gameBoard[i][1] >= counter:
 					line += " X"
 				else:
 					line += "  "
@@ -170,19 +209,19 @@ class Client:
 		print '   ',
 		print '|' + str.ljust(' ', spaceCount) + '|'
 
-	def maxCheckerInACol(self, gameState, first, last):
+	def maxCheckerInACol(self, gameBoard, first, last):
 		if first == last:
 			return None
 
 		max = 0
 		if first > last:
 			for i in range(first, last, -1):
-				max = gameState[i][0] if gameState[i][0] > max else max
-				max = gameState[i][1] if gameState[i][1] > max else max
+				max = gameBoard[i][0] if gameBoard[i][0] > max else max
+				max = gameBoard[i][1] if gameBoard[i][1] > max else max
 		else:
 			for i in range(last, first):
-				max = gameState[i][0] if gameState[i][0] > max else max
-				max = gameState[i][1] if gameState[i][1] > max else max
+				max = gameBoard[i][0] if gameBoard[i][0] > max else max
+				max = gameBoard[i][1] if gameBoard[i][1] > max else max
 		return max
 
 	def drawTitle(self, firstCol, lastCol):
@@ -216,8 +255,18 @@ class ReaderThread(threading.Thread):
 		while True:
 			response = self.connection.recv(1024).strip()
 			if response:
-				if response == "PING":
+				#if debug:
+				#	print response # Debug messsage
+				if "PING" in response:
 					self.connection.send("PONG")
+					#if debug:
+					#	print "Pong send" # Debug messsage
+					responsePingIncluded = response.split("PING")
+					if responsePingIncluded != None and responsePingIncluded != "":
+						if len(responsePingIncluded) > 1:
+							self.clientThread.setResponse(responsePingIncluded[0] + responsePingIncluded[1])
+						else:
+							self.clientThread.setResponse(responsePingIncluded[0])
 				else:
 					self.clientThread.setResponse(response)
 

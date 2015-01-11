@@ -47,7 +47,7 @@ class HeartBeatThread(threading.Thread):
 		print("Starting thread " + str(self.threadID) + " " + self.name)
 		while True:
 			if debug:
-					print "PING-PONG is starting" # Debug message
+				print "PING-PONG is starting" # Debug message
 			# Delete users info if no pong received in last 15 seconds
 			for username in self.pingSend:
 				self.deleteFromActiveUsers(username)
@@ -57,7 +57,8 @@ class HeartBeatThread(threading.Thread):
 			for username, connection in users.iteritems():
 				try:
 					connection.send("PING")
-					self.pingSend.append(username)
+					if username not in self.pingSend:
+						self.pingSend.append(username)
 				except:
 					if debug:
 						print("An exception occurred") # Debug message
@@ -72,6 +73,8 @@ class HeartBeatThread(threading.Thread):
 
 		threadLock.acquire()
 		if activeUsers.get(username, None):
+			conn = activeUsers.get(username)
+			conn.close()
 			del activeUsers[username]
 		try:
 			if readyToPlayQueue.index(username) > -1:
@@ -86,7 +89,11 @@ class HeartBeatThread(threading.Thread):
 		threadLock.release()
 
 	def pongReceived(self, username):
-		self.pingSend.remove(username)
+		try:
+			print("Pong received username = " + username)
+			self.pingSend.remove(username)
+		except ValueError:
+			pass
 
 	def checkWaitingClients(self):
 		threadLock.acquire()
@@ -219,7 +226,7 @@ class ClientThread(threading.Thread):
 						response = "WAGR#Wait#There is no active game at the moment; you are added to waiting list"
 					else:
 						game = activeGames[0]
-						game.addWatcher(self.registeredUsername)
+						game.addWatcher(self.registeredUsername, True)
 						response = "WAGR#Success# Stay tuned for seeing this great game"
 						exit = True
 					threadLock.release()
@@ -243,34 +250,55 @@ class GameThread(threading.Thread):
 		# Possible States
 		self.Playing = "Playing" # String Constant
 		self.PlayingInTurn = "PlayingInTurn" # String Constant
+		self.GoingOn = "Going on"
+		self.Over = "Over"
 		# Initial States
 		self.player1State = self.Playing
 		self.player2State = self.Playing
+		self.gameState = self.GoingOn
+		self.winner = ""
 		# Keep watchers connection
 		self.watchers = []
 		# Keep last move in mind for Wrong Play Alert
 		self.lastMove = ""
 
-		# GameState 0-23 for checkers on board, 24 for collection area and 25 for hit checkers
+		# GameBoard 0-23 for checkers on board, 25 (index 24) for collection area and 26 (index 25) for hit checkers
 		# In every row, first column is used for white checkers (O), second for black checkers (X)
-		self.gameState = [[0 for x in range(2)] for x in range(26)] # White, black
+		self.gameBoard = [[0 for x in range(2)] for x in range(26)] # White, black
 
 		# White checkers default position
-		self.gameState[0][0] = 2
-		self.gameState[11][0] = 5
-		self.gameState[16][0] = 3
-		self.gameState[18][0] = 5
+		self.gameBoard[0][0] = 2
+		self.gameBoard[11][0] = 5
+		self.gameBoard[16][0] = 3
+		self.gameBoard[18][0] = 5
 
 		# Black checkers default position
-		self.gameState[23][1] = 2
-		self.gameState[12][1] = 5
-		self.gameState[7][1] = 3
-		self.gameState[5][1] = 5
+		self.gameBoard[23][1] = 2
+		self.gameBoard[12][1] = 5
+		self.gameBoard[7][1] = 3
+		self.gameBoard[5][1] = 5
+
+		# Queues to receive messages
+		self.player1Queue = Queue.Queue()
+		self.player2Queue = Queue.Queue()
+		self.notifyQueue = Queue.Queue()
 
 	def run(self):
+		global threadCounter
+
 		threadLock.acquire()
 		activeGames.append(self)
+		threadCounter += 1
+		gameReaderThread = GameReaderThread(threadCounter, "Thread-" + str(threadCounter), self)
+		gameReaderThread.start()
+		threadCounter += 1
+		watcherThread = WatcherThread(threadCounter, "Thread-" + str(threadCounter), self)
+		watcherThread.start()
+		threadCounter += 1
+		notifyWatchersThread = NotifyWatchersThread(threadCounter, "Thread-" + str(threadCounter), self)
+		notifyWatchersThread.start()
 		threadLock.release()
+
 		if debug:
 			print("Starting GameThread for " + self.username1 + "-" + self.username2) # Debug message
 
@@ -286,14 +314,80 @@ class GameThread(threading.Thread):
 		time.sleep(1)
 
 		if whoWillStart == 0:
-			self.throwDice(self.player1, self.player2)
+			whoWillPlay = 0
 		else:
-			self.throwDice(self.player2, self.player1)
+			whoWillPlay = 1
+
+		while self.gameState != self.Over:
+			whoWillPlay = 1 if whoWillPlay == 0 else 0
+			if whoWillPlay == 0:
+				self.throwDice(self.player1, self.player2)
+			else:
+				self.throwDice(self.player2, self.player1)
+
+		finishMessage = "OVER#" + self.winner + "wins the game"
+		if activeUsers.get(self.username1, None):
+			player1.send(finishMessage)
+		if activeUsers.get(self.username2, None):
+			player2.send(finishMessage)
+		# notifyWatchers
+		activeGames.remove(self)
 
 		if debug:
 			print("Exiting GameThread " + self.name) # Debug message
 
-	def parser(self, request):
+	def throwDice(self, playerInTurn, playerOther):
+		# Check if users still active
+		if not activeUsers.get(self.username1, None) or self.gameBoard[24][1] == 15:
+			self.gameState = self.Over
+			self.winner = self.username2
+			return
+		if not activeUsers.get(self.username2, None) or self.gameBoard[24][0] == 15:
+			self.gameState = self.Over
+			self.winner = self.username1
+			return
+
+		dice1 = str(randint(1,6))
+		dice2 = str(randint(1,6))
+
+		playerInTurn.send( "THRD#Success#" + dice1 + "-" + dice2 )
+		playerOther.send( "THRD#Wait#" + dice1 + "-" + dice2 )
+		self.notifyQueue.put( "THRD#Wait#" + dice1 + "-" + dice2 )
+
+		# Wait for client's requests, read and answer them
+		while True:
+			exit = False
+			try:
+				request = None
+				if self.player1 == playerInTurn and not self.player1Queue.empty():
+					request = self.player1Queue.get()
+				if self.player2 == playerInTurn and not self.player2Queue.empty():
+					request = self.player2Queue.get()
+
+				if request:
+					response, exit = self.parser(request, 0 if playerInTurn == self.player1 else 1)
+					if response:
+						playerInTurn.send(response)
+						if exit:
+							playerOther.send(response)
+							self.notifyQueue.put(response)
+							if response[0:4] == "SNMR" and request[0:4] == "SNDM":
+								parts = response.split("#")
+								self.lastMove = parts[len(parts) - 1]
+								self.lastDice = dice1 + "-" + dice2
+							else: # After Wrong Play Alert set last move empty
+								self.lastMove = ""
+								self.lastDice = ""
+
+			except:
+				if debug:
+					print("An exception occurred") # Debug message
+					raise
+				break
+			if exit:
+				break
+
+	def parser(self, request, player):
 		if debug:
 			print("Incoming request : " + request) # Debug message
 		response = notValidRequest
@@ -303,44 +397,39 @@ class GameThread(threading.Thread):
 			if debug:
 				print("Checking on PlayingInTurn state") # Debug message
 			if requestParsed[0] == "SNDM":
-				if debug:
-					print("SNDM request is taken") # Debug message
+				moves = requestParsed[1].split(",")
+				response = "SNMR#" + str(player) + "#"
+				exit = True
+				if len(moves) < 5:
+					for move in moves:
+						if move == None or move == '':
+							continue
+						move.strip()
+						places = move.split("-")
+						if places == None or places == '':
+							continue
+						try:
+							checkerOldPlace = int(places[0].strip()) - 1
+							checkerNewPlace = int(places[1].strip()) - 1
+							if checkerOldPlace < 26 and checkerNewPlace < 26 and self.gameBoard[checkerOldPlace][player] > 0:
+								self.gameBoard[checkerOldPlace][player] -= 1
+								self.gameBoard[checkerNewPlace][player] += 1
+								response += places[0] + "-" + places[1] + ","
+							else:
+								response = "INFO#Fail#You should check your moves"
+								exit = False
+								return response, exit
+						except:
+							raise
+				else:
+					response = "INFO#Fail#You should check your moves"
+					exit = False
+			elif requestParsed[0] == "WRNG":
+				if self.lastMove != None and self.lastMove != "":
+					move = self.revertLastMove()
+					response = "SNMR#" + str(0 if player == 1 else 1) + "#" + move
+					exit = True
 		return response, exit
-
-	def throwDice(self, playerInTurn, playerOther):
-		dice1 = str(randint(1,6))
-		dice2 = str(randint(1,6))
-
-		playerInTurn.send( "THRD#Success#" + dice1 + "-" + dice2 )
-		playerOther.send( "THRD#Wait#" + dice1 + "-" + dice2 )
-		#notifyWatchersDice(username1, dice1, dice2)
-
-		# Wait for client's requests, read and answer them
-		while True:
-			exit = False
-			try:
-				request = playerInTurn.recv(1024).strip()
-				requestOther = playerOther.recv(1024).strip()
-
-				if requestOther: # It just can send PONG messages
-					if requestOther == "PONG":
-						self.pongReceived(playerOther)
-
-				if request:
-					if request == "PONG":
-						self.pongReceived(playerInTurn)
-					else:
-						response, exit = self.parser(request)
-						if response:
-							playerInTurn.send(response)
-							playerOther.send(response)
-			except:
-				if debug:
-					print("An exception occurred") # Debug message
-					raise
-				break
-			if exit:
-				break
 
 	def pongReceived(self, player):
 		if player == self.player1:
@@ -348,21 +437,121 @@ class GameThread(threading.Thread):
 		if player == self.player2:
 			self.heartBeatThread.pongReceived(self.username2)
 
-	def addWatcher(self, usernameOfWatcher):
+	def addWatcher(self, usernameOfWatcher, gameBoardSend):
 		if debug:
 			print("AddWatcher function in gameThread is running") # Debug message
 		connection = getConnFromUsername(usernameOfWatcher)
 		if connection:
 			self.watchers.append(connection)
+			if gameBoardSend:
+				gameBoardString = ""
+				for i in range(0, len(self.gameBoard) -1):
+					gameBoardString += str(i) + "-" + str(0) + "-" + self.gameBoard[i][0] + ","
+				connection.send("GMBR#" + gameBoardString) # Send complete gameboard
 			connection.send("WAGR#Success#Stay tuned for seeing this great game of players " + self.username1 + " and " + self.username2)
+
+	def deleteWatcher(self, usernameOfWatcher):
+		self.watchers.remove(usernameOfWatcher)
 
 	def getWatchersFromQueue(self):
 		threadLock.acquire()
 		while len(readyToWatchQueue) > 0:
-			self.addWatcher(readyToWatchQueue[0])
+			self.addWatcher(readyToWatchQueue[0], False)
 			del readyToWatchQueue[0]
 		threadLock.release()
 
+	def revertLastMove(self):
+		revertedMove = ""
+		moves = self.lastMove.split(",")
+		for move in moves:
+			if move == None or move == "":
+				continue
+			places = move.split("-")
+			if places == None or places == "":
+				continue
+			revertedMove += places[1] + "-" + places[0] + ","
+		return revertedMove
+
+# ------------------------GameReaderThread------------------------
+class GameReaderThread(threading.Thread):
+
+	def __init__(self, threadID, name, gameThread):
+		threading.Thread.__init__(self)
+		self.threadID = threadID
+		self.name = name
+		self.gameThread = gameThread
+		self.player1 = gameThread.player1
+		self.player2 = gameThread.player2
+	def run(self):
+		while self.gameThread.gameState != self.gameThread.Over:
+			request = self.player1.recv(1024).strip()
+			if request:
+				if debug:
+					print request # Debug messsage
+				if "PONG" in request:
+					self.gameThread.pongReceived(self.player1)
+					requestPongIncluded = request.split("PONG")
+					if requestPongIncluded != None and requestPongIncluded != "":
+						if len(requestPongIncluded) > 1:
+							self.gameThread.player1Queue.put(requestPongIncluded[0] + requestPongIncluded[1])
+						else:
+							self.gameThread.player1Queue.put(requestPongIncluded[0])
+				else:
+					self.gameThread.player1Queue.put(request)
+
+			request2 = self.player2.recv(1024).strip()
+			if request2:
+				print request2
+				if "PONG" in request2:
+					self.gameThread.pongReceived(self.player2)
+					request2PongIncluded = request2.split("PONG")
+					if request2PongIncluded != None and request2PongIncluded != "":
+						if len(request2PongIncluded) > 1:
+							self.gameThread.player2Queue.put(request2PongIncluded[0] + request2PongIncluded[1])
+						else:
+							self.gameThread.player2Queue.put(request2PongIncluded[0])
+				else:
+					self.gameThread.player2Queue.put(request2)
+
+# ------------------------WatcherThread------------------------
+class WatcherThread(threading.Thread):
+
+	def __init__(self, threadID, name, gameThread):
+		threading.Thread.__init__(self)
+		self.threadID = threadID
+		self.name = name
+		self.gameThread = gameThread
+		self.watchers = gameThread.watchers
+	def run(self):
+		while self.gameThread.gameState != self.gameThread.Over:
+			for watcher in self.watchers:
+				if not activeUsers.get(watcher, None):
+					self.gameThread.deleteWatcher(watcher)
+				watcherConn = getConnFromUsername(watcher)
+				request = watcherConn.recv(1024).strip()
+				if "PONG" in request:
+					self.gameThread.pongReceived(watcherConn)
+				if "LEAW" in request:
+					self.gameThread.deleteWatcher(watcher)
+
+# ------------------------NotifyWatcherThread------------------------
+class NotifyWatchersThread(threading.Thread):
+
+	def __init__(self, threadID, name, gameThread):
+		threading.Thread.__init__(self)
+		self.threadID = threadID
+		self.name = name
+		self.gameThread = gameThread
+		self.watchers = gameThread.watchers
+		self.queue = gameThread.notifyQueue
+	def run(self):
+		while self.gameThread.gameState != self.gameThread.Over:
+			if not self.queue.empty():
+				for watcher in self.watchers:
+					if not activeUsers.get(watcher, None):
+						self.gameThread.deleteWatcher(watcher)
+					watcherConn = getConnFromUsername(watcher)
+					watcherConn.send(self.queue.get())
 
 # ------------------------Global Variables------------------------
 # Queues {username}
@@ -379,7 +568,7 @@ threadCounter = 1
 notValidRequest = "WRRE#Fail#Your request is not valid"
 threadLock = threading.Lock()
 
-debug = False # Can be manually changed
+debug = True # Can be manually changed
 
 # ------------------------Global Methods------------------------
 def getConnFromUsername(username):
