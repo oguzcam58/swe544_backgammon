@@ -141,7 +141,7 @@ class Client:
 							places = checker.split("-")
 							if places == None or places == "" or len(places) < 3:
 								continue
-							self.gameBoard[places[0]][places[1]] = places[2]
+							self.gameBoard[int(places[0])][int(places[1])] = int(places[2])
 				elif responseParsed[0] == "LEWR":
 					self.state = self.Connected
 				elif responseParsed[0] == "OVER":

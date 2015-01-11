@@ -456,7 +456,7 @@ class GameThread(threading.Thread):
 			if gameBoardSend:
 				gameBoardString = ""
 				for i in range(0, len(self.gameBoard) -1):
-					gameBoardString += str(i) + "-" + str(0) + "-" + self.gameBoard[i][0] + ","
+					gameBoardString += str(i) + "-" + str(0) + "-" + str(self.gameBoard[i][0]) + ","
 				connection.send("GMBR#" + gameBoardString) # Send complete gameboard
 			connection.send("WAGR#Success#Stay tuned for seeing this great game of players " + self.username1 + " and " + self.username2)
 
@@ -536,18 +536,18 @@ class WatcherThread(threading.Thread):
 		global threadCounter
 		while self.gameThread.gameState != self.gameThread.Over:
 			for watcher in self.watchers:
-				if not activeUsers.get(watcher, None):
+				watcherUsername = getUsernameFromConn(watcher)
+				if not watcherUsername:
 					self.gameThread.deleteWatcher(watcher)
-				watcherConn = getConnFromUsername(watcher)
-				request = watcherConn.recv(1024).strip()
+				request = watcher.recv(1024).strip()
 				if "PONG" in request:
-					self.gameThread.pongReceived(watcherConn)
+					self.gameThread.pongReceived(watcher)
 				if "LEAW" in request:
 					self.gameThread.deleteWatcher(watcher)
-					self.watcherConn.send("LEWR#Success#You left watching the game, you may continue with others")
+					self.watcher.send("LEWR#Success#You left watching the game, you may continue with others")
 					threadLock.acquire()
 					threadCounter += 1
-					cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), self.gameThread.heartBeatThread, watcherConn, watcher)
+					cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), self.gameThread.heartBeatThread, watcher, watcherUsername)
 					threadLock.release()
 
 # ------------------------NotifyWatcherThread------------------------
@@ -563,20 +563,20 @@ class NotifyWatchersThread(threading.Thread):
 	def run(self):
 		while self.gameThread.gameState != self.gameThread.Over:
 			if not self.queue.empty():
+				message = self.queue.get()
 				for watcher in self.watchers:
-					if not activeUsers.get(watcher, None):
+					if not getUsernameFromConn(watcher):
 						self.gameThread.deleteWatcher(watcher)
-					watcherConn = getConnFromUsername(watcher)
-					watcherConn.send(self.queue.get())
+					watcher.send(message)
 
 		for watcher in self.watchers:
-			if not activeUsers.get(watcher, None):
+			watcherUsername = getUsernameFromConn(watcher)
+			if not watcherUsername:
 				self.gameThread.deleteWatcher(watcher)
-			watcherConn = getConnFromUsername(watcher)
-			watcherConn.send("OVER#" + self.gameThread.winner + " wins the game")
+			watcher.send("OVER#" + self.gameThread.winner + " wins the game")
 			threadLock.acquire()
 			threadCounter += 1
-			cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), self.gameThread.heartBeatThread, watcherConn, watcher)
+			cThread = ClientThread(threadCounter, "Thread-" + str(threadCounter), self.gameThread.heartBeatThread, watcher, watcherUsername)
 			threadLock.release()
 
 # ------------------------Global Variables------------------------
@@ -602,6 +602,12 @@ def getConnFromUsername(username):
 	if not connection and debug:
 		print(username + " has no connection") # Debug message
 	return connection
+
+def getUsernameFromConn(connection):
+	for username, conn in activeUsers.items():
+		if conn == connection:
+			return username
+	return None
 
 # ------------------------Main Program Functionality------------------------
 server = Server()
