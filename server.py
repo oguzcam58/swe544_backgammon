@@ -63,7 +63,6 @@ class HeartBeatThread(threading.Thread):
 				except:
 					if debug:
 						print('An exception occurred in HeartBeatThread-1') # Debug message
-						raise
 					self.deleteFromActiveUsers(username, True)
 			self.checkWaitingClients()
 			time.sleep(15)
@@ -156,7 +155,6 @@ class ClientThread(threading.Thread):
 			except:
 				if debug:
 					print('An exception occurred in ClientThread.run-1') # Debug message
-					raise
 				break
 			if exit:
 				break
@@ -340,9 +338,15 @@ class GameThread(threading.Thread):
 
 		finishMessage = 'OVER#' + self.winner + 'wins the game'
 		if activeUsers.get(self.username1, None):
-			self.player1.send(finishMessage)
+			try:
+				self.player1.send(finishMessage)
+			except:
+				pass
 		if activeUsers.get(self.username2, None):
-			self.player2.send(finishMessage)
+			try:
+				self.player2.send(finishMessage)
+			except:
+				pass
 
 		threadLock.acquire()
 		threadCounter += 1
@@ -376,7 +380,7 @@ class GameThread(threading.Thread):
 		self.notifyQueue.put( 'THRD#Wait#' + dice1 + '-' + dice2 )
 
 		# Wait for client's requests, read and answer them
-		while True:
+		while self.gameState != self.Over:
 			exit = False
 			try:
 				request = None
@@ -407,7 +411,6 @@ class GameThread(threading.Thread):
 			except:
 				if debug:
 					print('An exception occurred in throwDice-1') # Debug message
-					raise
 				break
 			if exit:
 				break
@@ -447,7 +450,6 @@ class GameThread(threading.Thread):
 						except:
 							if debug:
 								print('An exception occurred in GameThread.parser-1') # Debug message
-							raise
 				else:
 					response = 'INFO#Fail#You should check your moves'
 					exit = False
@@ -523,47 +525,49 @@ class GameReaderThread(threading.Thread):
 		while self.gameThread.gameState != self.gameThread.Over:
 			try:
 				request = self.player1.recv(1024).strip()
+				if request:
+					if debug:
+						print(request) # Debug messsage
+					if 'PONG' in request:
+						if debug:
+							print('PONG received by GameReaderThread.run for player1') # Debug message
+						self.gameThread.pongReceived(self.player1)
+						requestPongIncluded = request.split('PONG')
+						if requestPongIncluded != None and requestPongIncluded != '':
+							if len(requestPongIncluded) > 1:
+								requestWithoutPong = requestPongIncluded[0] + requestPongIncluded[1]
+								if requestWithoutPong != None and requestWithoutPong != '':
+									self.gameThread.player1Queue.put(requestWithoutPong)
+					else:
+						self.gameThread.player1Queue.put(request)
 			except:
 				if debug:
 					print('An exception occurred in GameReaderThread-1') # Debug message
 				self.gameThread.heartBeatThread.deleteFromActiveUsers(getUsernameFromConn(self.gameThread.username1), True)
-			if request:
-				if debug:
-					print(request) # Debug messsage
-				if 'PONG' in request:
-					if debug:
-						print('PONG received by GameReaderThread.run for player1') # Debug message
-					self.gameThread.pongReceived(self.player1)
-					requestPongIncluded = request.split('PONG')
-					if requestPongIncluded != None and requestPongIncluded != '':
-						if len(requestPongIncluded) > 1:
-							requestWithoutPong = requestPongIncluded[0] + requestPongIncluded[1]
-							if requestWithoutPong != None and requestWithoutPong != '':
-								self.gameThread.player1Queue.put(requestWithoutPong)
-				else:
-					self.gameThread.player1Queue.put(request)
+				self.gameThread.gameState = self.gameThread.Over
 
 			try:
 				request2 = self.player2.recv(1024).strip()
+				if request2:
+					if debug:
+						print(request2) # Debug Message
+					if 'PONG' in request2:
+						if debug:
+							print('PONG received by GameReaderThread.run for player2') # Debug message
+						self.gameThread.pongReceived(self.player2)
+						request2PongIncluded = request2.split('PONG')
+						if request2PongIncluded != None and request2PongIncluded != '':
+							if len(request2PongIncluded) > 1:
+								requestWithoutPong = request2PongIncluded[0] + request2PongIncluded[1]
+								if requestWithoutPong != None and requestWithoutPong != '':
+									self.gameThread.player2Queue.put(requestWithoutPong)
+					else:
+						self.gameThread.player2Queue.put(request2)
 			except:
 				if debug:
 					print('An exception occurred in GameReaderThread-2') # Debug message
 				self.gameThread.heartBeatThread.deleteFromActiveUsers(getUsernameFromConn(self.gameThread.username2), True)
-			if request2:
-				if debug:
-					print(request2) # Debug Message
-				if 'PONG' in request2:
-					if debug:
-						print('PONG received by GameReaderThread.run for player2') # Debug message
-					self.gameThread.pongReceived(self.player2)
-					request2PongIncluded = request2.split('PONG')
-					if request2PongIncluded != None and request2PongIncluded != '':
-						if len(request2PongIncluded) > 1:
-							requestWithoutPong = request2PongIncluded[0] + request2PongIncluded[1]
-							if requestWithoutPong != None and requestWithoutPong != '':
-								self.gameThread.player2Queue.put(requestWithoutPong)
-				else:
-					self.gameThread.player2Queue.put(request2)
+				self.gameThread.gameState = self.gameThread.Over
 
 # ------------------------WatcherThread------------------------
 class WatcherThread(threading.Thread):
@@ -622,18 +626,24 @@ class NotifyWatchersThread(threading.Thread):
 					else:
 						if debug:
 							print('Notify watcher ' + watcherUsername + str(len(self.gameThread.watchers)))
-						watcher.send(message)
+						try:
+							watcher.send(message)
+						except:
+							pass
 
 		for watcher in self.gameThread.watchers:
 			watcherUsername = getUsernameFromConn(watcher)
 			if not watcherUsername:
 				print('Delete watcher from game with username ' + watcherUsername)
 				self.gameThread.deleteWatcher(watcher)
-			watcher.send('OVER#' + self.gameThread.winner + ' wins the game')
-			threadLock.acquire()
-			threadCounter += 1
-			cThread = ClientThread(threadCounter, 'Thread-' + str(threadCounter), self.gameThread.heartBeatThread, watcher, watcherUsername)
-			threadLock.release()
+			try:
+				watcher.send('OVER#' + self.gameThread.winner + ' wins the game')
+				threadLock.acquire()
+				threadCounter += 1
+				cThread = ClientThread(threadCounter, 'Thread-' + str(threadCounter), self.gameThread.heartBeatThread, watcher, watcherUsername)
+				threadLock.release()
+			except:
+				pass
 
 # ------------------------Global Variables------------------------
 # Lists {username}
